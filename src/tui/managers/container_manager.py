@@ -761,9 +761,9 @@ class ContainerManager:
                 except json.JSONDecodeError:
                     pass
         else:
-            # For Docker, use compose ps command
+            # For Docker, use compose ps command (--all to include exited containers)
             success, stdout, stderr = await self._run_compose_command(
-                ["ps", "--format", "json"]
+                ["ps", "--all", "--format", "json"]
             )
 
             if success and stdout.strip():
