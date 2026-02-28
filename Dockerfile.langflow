@@ -1,5 +1,11 @@
 FROM langflowai/langflow-nightly:1.7.0.dev21
 
+# docling-serve (via docling 2.75.0) uses docling-core>=2.62.0.
+# The lfx package was built against 2.49.0 but the JSON schema in 2.49.0
+# cannot validate documents serialized by docling-core 2.66.0+.
+# Upgrading here ensures DoclingDocument.model_validate() succeeds at runtime.
+RUN pip install --quiet "docling-core==2.66.0"
+
 EXPOSE 7860
 
 CMD ["langflow", "run", "--host", "0.0.0.0", "--port", "7860"]

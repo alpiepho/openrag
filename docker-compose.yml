@@ -124,6 +124,17 @@ services:
       context: .
       dockerfile: Dockerfile.langflow
     container_name: langflow
+    # Upgrade docling-core to match the version used by docling-serve (via docling 2.75.0).
+    # The pre-built image ships 2.49.0 but docling-serve serialises DoclingDocuments with
+    # 2.66.0 schema; model_validate() in the Langflow component fails on the mismatch.
+    command: >
+      sh -c "pip install --quiet 'docling-core==2.66.0' &&
+             langflow run --host 0.0.0.0 --port 7860"
+    # On Linux, host.docker.internal is not automatically defined (unlike Mac/Windows
+    # Docker Desktop). host-gateway is a Docker built-in that always resolves to the
+    # host machine, allowing containers to reach services like docling-serve on port 5001.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${LANGFLOW_PORT:-7860}:7860"
     environment:
@@ -163,10 +174,10 @@ services:
       - LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT=JWT,OPENRAG-QUERY-FILTER,OPENSEARCH_PASSWORD,OPENSEARCH_URL,DOCLING_SERVE_URL,OWNER,OWNER_NAME,OWNER_EMAIL,CONNECTOR_TYPE,DOCUMENT_ID,SOURCE_URL,ALLOWED_USERS,ALLOWED_GROUPS,FILENAME,MIMETYPE,FILESIZE,SELECTED_EMBEDDING_MODEL,OPENAI_API_KEY,ANTHROPIC_API_KEY,WATSONX_API_KEY,WATSONX_ENDPOINT,WATSONX_PROJECT_ID,OLLAMA_BASE_URL,OPENSEARCH_INDEX_NAME
       - LANGFLOW_LOG_LEVEL=DEBUG
       - LANGFLOW_WORKERS=${LANGFLOW_WORKERS:-1}
-      - LANGFLOW_AUTO_LOGIN=${LANGFLOW_AUTO_LOGIN}
-      - LANGFLOW_SUPERUSER=${LANGFLOW_SUPERUSER}
-      - LANGFLOW_SUPERUSER_PASSWORD=${LANGFLOW_SUPERUSER_PASSWORD}
-      - LANGFLOW_NEW_USER_IS_ACTIVE=${LANGFLOW_NEW_USER_IS_ACTIVE}
-      - LANGFLOW_ENABLE_SUPERUSER_CLI=${LANGFLOW_ENABLE_SUPERUSER_CLI}
+      - LANGFLOW_AUTO_LOGIN=${LANGFLOW_AUTO_LOGIN:-true}
+      - LANGFLOW_SUPERUSER=${LANGFLOW_SUPERUSER:-}
+      - LANGFLOW_SUPERUSER_PASSWORD=${LANGFLOW_SUPERUSER_PASSWORD:-}
+      - LANGFLOW_NEW_USER_IS_ACTIVE=${LANGFLOW_NEW_USER_IS_ACTIVE:-true}
+      - LANGFLOW_ENABLE_SUPERUSER_CLI=${LANGFLOW_ENABLE_SUPERUSER_CLI:-false}
       # - DEFAULT_FOLDER_NAME=OpenRAG
       - HIDE_GETTING_STARTED_PROGRESS=true

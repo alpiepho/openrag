@@ -6,12 +6,13 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional
 from textual.app import App, ComposeResult
-from utils.logging_config import get_logger
+from utils.logging_config import configure_from_env, get_logger
 try:
     from importlib.resources import files
 except ImportError:
     from importlib_resources import files
 
+configure_from_env()
 logger = get_logger(__name__)
 
 from .screens.welcome import WelcomeScreen

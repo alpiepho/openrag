@@ -37,6 +37,7 @@ class WelcomeScreen(Screen):
         self.default_button_id = "basic-setup-btn"
         self._state_checked = False
         self.has_flow_backups = False
+        self.backend_exited = False  # True when backend exited while other containers are still running
         
         # Check if .env file exists
         self.has_env_file = self.env_manager.env_file.exists()
@@ -97,9 +98,15 @@ class WelcomeScreen(Screen):
         try:
             # Use detected runtime command to check services
             import subprocess
-            compose_cmd = self.container_manager.runtime_info.compose_command + [
+            from utils.paths import get_tui_env_file
+            compose_cmd = self.container_manager.runtime_info.compose_command.copy()
+            # Add --env-file for correct project context (matches async _run_compose_command)
+            tui_env_file = get_tui_env_file()
+            if tui_env_file.exists():
+                compose_cmd.extend(["--env-file", str(tui_env_file)])
+            compose_cmd += [
                 "-f", str(self.container_manager.compose_file),
-                "ps", "--format", "json"
+                "ps", "--all", "--format", "json"
             ]
             result = subprocess.run(
                 compose_cmd,
@@ -140,12 +147,18 @@ class WelcomeScreen(Screen):
                 for s in services:
                     if not isinstance(s, dict):
                         continue
-                    # Get service name - try compose label first (most reliable for Podman)
-                    labels = s.get('Labels', {}) or {}
-                    service_name = labels.get('com.docker.compose.service', '')
+                    # Get service name: prefer the Service field (Docker Compose v2),
+                    # then try Labels dict (Podman), then fall back to Name mapping.
+                    # Note: Docker Compose v2 returns Labels as a comma-separated
+                    # string, not a dict, so we must check the type before calling .get().
+                    service_name = s.get('Service', '')
+                    if not service_name:
+                        labels = s.get('Labels', {})
+                        if isinstance(labels, dict):
+                            service_name = labels.get('com.docker.compose.service', '')
                     if not service_name:
                         # Fall back to container name mapping
-                        container_name = s.get('Name') or s.get('Service', '')
+                        container_name = s.get('Name', '')
                         if not container_name:
                             names = s.get('Names', [])
                             if names and isinstance(names, list):
@@ -164,11 +177,19 @@ class WelcomeScreen(Screen):
                 # Services are running if all expected services are in running state
                 # (i.e., we have all expected services running and none are still starting)
                 self.services_running = len(running_services) == len(expected) and len(starting_services) == 0
+                # Detect the specific case where the backend exited while other services are up
+                self.backend_exited = (
+                    not self.services_running
+                    and "openrag-backend" not in running_services
+                    and len(running_services) > 0
+                )
             else:
                 self.services_running = False
+                self.backend_exited = False
         except Exception:
             # Fallback to False if detection fails
             self.services_running = False
+            self.backend_exited = False
 
         # Update native service state as part of detection
         self.docling_running = self.docling_manager.is_running()
@@ -194,6 +215,21 @@ class WelcomeScreen(Screen):
         if all_services_running:
             welcome_text.append(
                 "✓ All services are running\n\n", style="bold green"
+            )
+        elif self.backend_exited:
+            welcome_text.append(
+                "⚠ Backend exited — other services are still running\n\n", style="bold yellow"
+            )
+            welcome_text.append(
+                "The openrag-backend container stopped, likely because Langflow\n"
+                "was not ready in time during startup. You have three options:\n\n"
+                "  1. Press R to refresh — if Langflow has since finished\n"
+                "     starting, the status will update automatically.\n"
+                "  2. Open the Status screen to confirm Langflow is healthy\n"
+                "     before restarting the backend.\n"
+                "  3. Run in a terminal (fastest fix):\n"
+                "       docker start openrag-backend\n\n",
+                style="yellow"
             )
         elif self.services_running or self.docling_running:
             welcome_text.append(
@@ -286,8 +322,15 @@ class WelcomeScreen(Screen):
             ]
             # Services are running if all expected services are in running state
             self.services_running = len(running_services) == len(expected) and len(starting_services) == 0
+            # Detect the specific case where the backend exited while other services are up
+            self.backend_exited = (
+                not self.services_running
+                and "openrag-backend" not in running_services
+                and len(running_services) > 0
+            )
         else:
             self.services_running = False
+            self.backend_exited = False
 
         # Check native service state
         self.docling_running = self.docling_manager.is_running()
@@ -347,8 +390,14 @@ class WelcomeScreen(Screen):
                 s.name for s in services.values() if s.status == ServiceStatus.STARTING
             ]
             self.services_running = len(running_services) == len(expected) and len(starting_services) == 0
+            self.backend_exited = (
+                not self.services_running
+                and "openrag-backend" not in running_services
+                and len(running_services) > 0
+            )
         else:
             self.services_running = False
+            self.backend_exited = False
 
         # Re-detect native service state
         self.docling_running = self.docling_manager.is_running()
@@ -423,8 +472,14 @@ class WelcomeScreen(Screen):
                 s.name for s in services.values() if s.status == ServiceStatus.STARTING
             ]
             self.services_running = len(running_services) == len(expected) and len(starting_services) == 0
+            self.backend_exited = (
+                not self.services_running
+                and "openrag-backend" not in running_services
+                and len(running_services) > 0
+            )
         else:
             self.services_running = False
+            self.backend_exited = False
 
         # Re-detect native service state
         self.docling_running = self.docling_manager.is_running()
@@ -562,6 +617,42 @@ class WelcomeScreen(Screen):
 
         # Now start native services (docling-serve can now detect the compose network)
         await self._start_native_services_after_containers()
+
+        # Schedule a delayed re-check to catch the common case where the backend
+        # exits shortly after startup (e.g., because Langflow wasn't ready).
+        self.set_timer(20, self._delayed_post_start_check)
+
+    async def _delayed_post_start_check(self) -> None:
+        """Delayed re-check after starting services to detect backend exit."""
+        # Only re-check if we think everything is running — if the user already
+        # navigated away or stopped services, skip the check.
+        if not self.services_running:
+            return
+        await self._refresh_state_silent()
+
+    async def _refresh_state_silent(self) -> None:
+        """Refresh service state without showing a notification."""
+        if self.container_manager.is_available():
+            services = await self.container_manager.get_service_status(force_refresh=True)
+            expected = set(self.container_manager.expected_services)
+            running_services = [
+                s.name for s in services.values() if s.status == ServiceStatus.RUNNING
+            ]
+            starting_services = [
+                s.name for s in services.values() if s.status == ServiceStatus.STARTING
+            ]
+            self.services_running = len(running_services) == len(expected) and len(starting_services) == 0
+            self.backend_exited = (
+                not self.services_running
+                and "openrag-backend" not in running_services
+                and len(running_services) > 0
+            )
+        else:
+            self.services_running = False
+            self.backend_exited = False
+
+        self.docling_running = self.docling_manager.is_running()
+        await self._refresh_welcome_content()
 
     async def _start_native_services_after_containers(self) -> None:
         """Start native services after containers have been started."""

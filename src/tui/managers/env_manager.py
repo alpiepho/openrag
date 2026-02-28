@@ -58,6 +58,7 @@ class EnvConfig:
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     langflow_public_url: str = ""
+    docling_serve_url: str = ""  # Override Docling URL (e.g. for remote instances)
 
     # Langfuse settings (optional)
     langfuse_secret_key: str = ""
@@ -210,6 +211,7 @@ class EnvManager:
             "LANGFUSE_SECRET_KEY": "langfuse_secret_key",  # pragma: allowlist secret
             "LANGFUSE_PUBLIC_KEY": "langfuse_public_key",  # pragma: allowlist secret
             "LANGFUSE_HOST": "langfuse_host",
+            "DOCLING_SERVE_URL": "docling_serve_url",
         }
 
         loaded_from_file = False
@@ -521,6 +523,7 @@ class EnvManager:
                     ("AWS_ACCESS_KEY_ID", self.config.aws_access_key_id),
                     ("AWS_SECRET_ACCESS_KEY", self.config.aws_secret_access_key),
                     ("LANGFLOW_PUBLIC_URL", self.config.langflow_public_url),
+                    ("DOCLING_SERVE_URL", self.config.docling_serve_url),
                 ]
 
                 optional_written = False
@@ -646,6 +649,12 @@ class EnvManager:
                 "langflow_public_url",
                 "Langflow Public URL (optional)",
                 "http://localhost:7860",
+                False,
+            ),
+            (
+                "docling_serve_url",
+                "Docling Serve URL (optional)",
+                "Leave empty to use host.docker.internal:5001",
                 False,
             ),
         ]
