@@ -430,40 +430,59 @@ class AppClients:
             if self._patched_async_client is not None:
                 return self._patched_async_client
 
-            # Load all provider credentials into environment for LiteLLM
+            # Load provider credentials into environment for LiteLLM
             # LiteLLM routes based on model name prefixes (openai/, ollama/, watsonx/, etc.)
             try:
                 config = get_openrag_config()
+                is_airgap = getattr(config, "airgap", False)
 
-                # Set OpenAI credentials
-                if config.providers.openai.api_key:
-                    os.environ["OPENAI_API_KEY"] = config.providers.openai.api_key
-                    logger.debug("Loaded OpenAI API key from config")
+                if not is_airgap:
+                    # Set OpenAI credentials
+                    if config.providers.openai.api_key:
+                        os.environ["OPENAI_API_KEY"] = config.providers.openai.api_key
+                        logger.debug("Loaded OpenAI API key from config")
 
-                # Set Anthropic credentials
-                if config.providers.anthropic.api_key:
-                    os.environ["ANTHROPIC_API_KEY"] = config.providers.anthropic.api_key
-                    logger.debug("Loaded Anthropic API key from config")
+                    # Set Anthropic credentials
+                    if config.providers.anthropic.api_key:
+                        os.environ["ANTHROPIC_API_KEY"] = config.providers.anthropic.api_key
+                        logger.debug("Loaded Anthropic API key from config")
 
-                # Set WatsonX credentials
-                if config.providers.watsonx.api_key:
-                    os.environ["WATSONX_API_KEY"] = config.providers.watsonx.api_key
-                if config.providers.watsonx.endpoint:
-                    os.environ["WATSONX_ENDPOINT"] = config.providers.watsonx.endpoint
-                    os.environ["WATSONX_API_BASE"] = config.providers.watsonx.endpoint  # LiteLLM expects this name
-                if config.providers.watsonx.project_id:
-                    os.environ["WATSONX_PROJECT_ID"] = config.providers.watsonx.project_id
-                if config.providers.watsonx.api_key:
-                    logger.debug("Loaded WatsonX credentials from config")
+                    # Set WatsonX credentials
+                    if config.providers.watsonx.api_key:
+                        os.environ["WATSONX_API_KEY"] = config.providers.watsonx.api_key
+                    if config.providers.watsonx.endpoint:
+                        os.environ["WATSONX_ENDPOINT"] = config.providers.watsonx.endpoint
+                        os.environ["WATSONX_API_BASE"] = config.providers.watsonx.endpoint  # LiteLLM expects this name
+                    if config.providers.watsonx.project_id:
+                        os.environ["WATSONX_PROJECT_ID"] = config.providers.watsonx.project_id
+                    if config.providers.watsonx.api_key:
+                        logger.debug("Loaded WatsonX credentials from config")
 
-                # Set Ollama endpoint
+                # Set Ollama endpoint — always needed
                 if config.providers.ollama.endpoint:
                     os.environ["OLLAMA_BASE_URL"] = config.providers.ollama.endpoint
                     os.environ["OLLAMA_ENDPOINT"] = config.providers.ollama.endpoint
                     logger.debug("Loaded Ollama endpoint from config")
 
             except Exception as e:
+                is_airgap = False
                 logger.debug("Could not load provider credentials from config", error=str(e))
+
+            # ── Airgap shortcut: skip HTTP/2 probe entirely ──
+            # The probe calls api.openai.com which will hang without internet.
+            if is_airgap:
+                # Provide a dummy OPENAI_API_KEY so AsyncOpenAI() constructor
+                # doesn't raise; all real work is routed via LiteLLM to Ollama.
+                os.environ.setdefault("OPENAI_API_KEY", "sk-airgap-unused")
+                http_client = httpx.AsyncClient(
+                    http2=False,
+                    timeout=httpx.Timeout(60.0, connect=10.0)
+                )
+                self._patched_async_client = patch_openai_with_mcp(
+                    AsyncOpenAI(http_client=http_client)
+                )
+                logger.info("OpenAI client initialized in airgap mode (HTTP/1.1, no probe)")
+                return self._patched_async_client
 
             # Try to initialize the client - AsyncOpenAI() will read from environment
             # We'll try HTTP/2 first with a probe, then fall back to HTTP/1.1 if it times out

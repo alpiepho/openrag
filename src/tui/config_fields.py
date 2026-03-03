@@ -43,6 +43,16 @@ class ConfigSection:
 
 
 CONFIG_SECTIONS: list[ConfigSection] = [
+    # ── Air-Gap Mode ────────────────────────────────────────────
+    ConfigSection("Air-Gap Mode", [
+        ConfigField(
+            "airgap", "AIRGAP", "Air-Gap Mode (true/false)",
+            placeholder="false", default="false",
+            helper_text="Set to 'true' to disable all internet-dependent features "
+                        "(telemetry, OpenAI, Anthropic, WatsonX). Only Ollama will be used.",
+        ),
+    ]),
+
     # ── OpenSearch ──────────────────────────────────────────────
     ConfigSection("OpenSearch", [
         ConfigField(

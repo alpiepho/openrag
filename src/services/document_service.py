@@ -16,16 +16,32 @@ from utils.document_processing import extract_relevant
 from utils.telemetry import TelemetryClient, Category, MessageId
 
 
-def get_token_count(text: str, model: str = None) -> int:
-    """Get accurate token count using tiktoken"""
+def _get_tiktoken_encoding(model: str = None):
+    """Get tiktoken encoding, with graceful fallback for air-gapped environments."""
     model = model or get_embedding_model()
     try:
-        encoding = tiktoken.encoding_for_model(model)
-        return len(encoding.encode(text))
+        return tiktoken.encoding_for_model(model)
     except KeyError:
-        # Fallback to cl100k_base for unknown models
-        encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(text))
+        pass
+    except Exception as e:
+        logger.warning(f"tiktoken encoding_for_model failed (air-gapped?): {e}")
+        return None
+    try:
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception as e:
+        logger.warning(
+            "tiktoken encoding unavailable (air-gapped or cache cold). "
+            f"Falling back to approximate token counting (chars/4). Error: {e}"
+        )
+        return None
+
+
+def get_token_count(text: str, model: str = None) -> int:
+    """Get token count using tiktoken, with char-based fallback for air-gapped environments."""
+    encoding = _get_tiktoken_encoding(model)
+    if encoding is None:
+        return len(text) // 4  # Rough approximation: ~4 chars per token
+    return len(encoding.encode(text))
 
 
 def chunk_texts_for_embeddings(
@@ -56,17 +72,19 @@ def chunk_texts_for_embeddings(
                 current_tokens = 0
 
             # Split the large text into smaller chunks
-            try:
-                encoding = tiktoken.encoding_for_model(model)
-            except KeyError:
-                encoding = tiktoken.get_encoding("cl100k_base")
+            encoding = _get_tiktoken_encoding(model)
 
-            tokens = encoding.encode(text)
-
-            for i in range(0, len(tokens), max_tokens):
-                chunk_tokens = tokens[i : i + max_tokens]
-                chunk_text = encoding.decode(chunk_tokens)
-                batches.append([chunk_text])
+            if encoding is not None:
+                tokens = encoding.encode(text)
+                for i in range(0, len(tokens), max_tokens):
+                    chunk_tokens = tokens[i : i + max_tokens]
+                    chunk_text = encoding.decode(chunk_tokens)
+                    batches.append([chunk_text])
+            else:
+                # Char-based fallback: ~4 chars per token
+                chars_per_batch = max_tokens * 4
+                for i in range(0, len(text), chars_per_batch):
+                    batches.append([text[i : i + chars_per_batch]])
 
         # If adding this text would exceed limit, start new batch
         elif current_tokens + text_tokens > max_tokens:

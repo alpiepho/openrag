@@ -108,6 +108,7 @@ class OpenRAGConfig:
     agent: AgentConfig
     onboarding: OnboardingState
     edited: bool = False  # Track if manually edited
+    airgap: bool = False  # Air-gap mode: disable all internet-dependent features
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "OpenRAGConfig":
@@ -124,6 +125,7 @@ class OpenRAGConfig:
             agent=AgentConfig(**data.get("agent", {})),
             onboarding=OnboardingState(**data.get("onboarding", {})),
             edited=data.get("edited", False),
+            airgap=data.get("airgap", False),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -194,6 +196,7 @@ class ConfigManager:
                         config_data[section].update(file_config[section])
 
                 config_data["edited"] = file_config.get("edited", False)
+                config_data["airgap"] = file_config.get("airgap", False)
 
                 logger.info(f"Loaded configuration from {self.config_file}")
             except Exception as e:
@@ -205,8 +208,35 @@ class ConfigManager:
         # Override with environment variables (highest priority, but respect edited flags)
         self._load_env_overrides(config_data, temp_config)
 
+        # Check AIRGAP env var (always respected, even when edited=True)
+        airgap_val = os.environ.get("AIRGAP", "").lower()
+        if airgap_val in ("true", "1", "yes", "on"):
+            config_data["airgap"] = True
+
         # Create config object
         self._config = OpenRAGConfig.from_dict(config_data)
+
+        # Enforce airgap constraints: only Ollama is valid, blank cloud providers
+        if self._config.airgap:
+            logger.info("Air-gap mode enabled: disabling all cloud providers, forcing Ollama-only")
+            self._config.providers.openai.configured = False
+            self._config.providers.openai.api_key = ""
+            self._config.providers.anthropic.configured = False
+            self._config.providers.anthropic.api_key = ""
+            self._config.providers.watsonx.configured = False
+            self._config.providers.watsonx.api_key = ""
+            if self._config.knowledge.embedding_provider != "ollama":
+                logger.warning(
+                    f"Air-gap mode: overriding embedding_provider from "
+                    f"'{self._config.knowledge.embedding_provider}' to 'ollama'"
+                )
+                self._config.knowledge.embedding_provider = "ollama"
+            if self._config.agent.llm_provider != "ollama":
+                logger.warning(
+                    f"Air-gap mode: overriding llm_provider from "
+                    f"'{self._config.agent.llm_provider}' to 'ollama'"
+                )
+                self._config.agent.llm_provider = "ollama"
 
         logger.debug("Configuration loaded", config=self._config.to_dict())
         return self._config
